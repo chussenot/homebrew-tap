@@ -6,7 +6,6 @@
 class Jud < Formula
   desc "Evaluate JSON against a .jud rubric with a calibrated System One model"
   homepage "https://github.com/chussenot/judgment"
-  version "0.10.2"
   license "MIT"
 
   livecheck do
