@@ -1,0 +1,88 @@
+name: CI
+
+# Audit, install and test every formula in the tap, from the real release
+# tarballs, on the platforms the formulae serve: Apple silicon (macos-latest
+# is arm64, with the runner's own Homebrew) and Linux x86-64 (Homebrew's own
+# container image, since the Ubuntu runner image no longer carries brew).
+# Only GitHub-owned actions are used; the checkout is linked in as the tap,
+# so what is tested is the commit, not what GitHub serves.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_ANALYTICS: 1
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_ENV_HINTS: 1
+  # `brew audit --online` and `brew livecheck` ask the GitHub API; the job's
+  # token keeps them out of the unauthenticated rate limit.
+  HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+
+jobs:
+  test:
+    name: brew audit, install, test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # The Linux leg runs in Homebrew's image, as its linuxbrew user: Homebrew
+    # refuses to run as root, which is what a job container runs as unless
+    # told otherwise. The macOS leg has no container (toJSON of nothing).
+    container: ${{ fromJSON(toJSON(matrix.container)) }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+        include:
+          - os: ubuntu-latest
+            container:
+              image: ghcr.io/homebrew/brew:main
+              options: --user=linuxbrew
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner's Homebrew, brought to a version that knows tap trust
+      # (6.0, June 2026), then told where this checkout is.
+      - name: Set up the checkout as the tap
+        run: |
+          set -eu
+          brew update
+          brew --version
+          # In the container the checkout belongs to another user than brew's.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          taps="$(brew --repository)/Library/Taps/chussenot"
+          mkdir -p "$taps"
+          ln -s "$GITHUB_WORKSPACE" "$taps/homebrew-tap"
+          brew tap-info chussenot/tap
+          # Whole-tap trust, for this runner only: `brew audit` and `brew
+          # style` read every formula in the tap, and the install below is
+          # of our own commit.
+          brew trust chussenot/tap
+
+      - name: Audit
+        run: |
+          set -eu
+          brew style chussenot/tap
+          brew audit --strict --online --tap chussenot/tap
+
+      - name: Install and test
+        run: |
+          set -eu
+          brew install --verbose chussenot/tap/jud
+          brew test --verbose chussenot/tap/jud
+          jud --version
+          # The completions the formula generates from the binary.
+          prefix="$(brew --prefix)"
+          test -s "$prefix/etc/bash_completion.d/jud"
+          test -s "$prefix/share/zsh/site-functions/_jud"
+          test -s "$prefix/share/fish/vendor_completions.d/jud.fish"
+          brew info chussenot/tap/jud
+
+      # livecheck is how `brew livecheck jud` says a newer release exists;
+      # it must resolve to the version the formula carries or a later one.
+      - name: Livecheck
+        run: brew livecheck --verbose chussenot/tap/jud
