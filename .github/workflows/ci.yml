@@ -2,9 +2,10 @@ name: CI
 
 # Audit, install and test every formula in the tap, from the real release
 # tarballs, on the platforms the formulae serve: Apple silicon (macos-latest
-# is arm64) and Linux x86-64. Only GitHub-owned actions and the runner's own
-# Homebrew are used; the checkout is linked in as the tap, so what is tested
-# is the commit, not what GitHub serves.
+# is arm64, with the runner's own Homebrew) and Linux x86-64 (Homebrew's own
+# container image, since the Ubuntu runner image no longer carries brew).
+# Only GitHub-owned actions are used; the checkout is linked in as the tap,
+# so what is tested is the commit, not what GitHub serves.
 
 on:
   push:
@@ -27,11 +28,20 @@ jobs:
   test:
     name: brew audit, install, test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The Linux leg runs in Homebrew's image, as its linuxbrew user: Homebrew
+    # refuses to run as root, which is what a job container runs as unless
+    # told otherwise. The macOS leg has no container (toJSON of nothing).
+    container: ${{ fromJSON(toJSON(matrix.container)) }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest]
+        include:
+          - os: ubuntu-latest
+            container:
+              image: ghcr.io/homebrew/brew:main
+              options: --user=linuxbrew
     steps:
       - uses: actions/checkout@v4
 
@@ -42,6 +52,8 @@ jobs:
           set -eu
           brew update
           brew --version
+          # In the container the checkout belongs to another user than brew's.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           taps="$(brew --repository)/Library/Taps/chussenot"
           mkdir -p "$taps"
           ln -s "$GITHUB_WORKSPACE" "$taps/homebrew-tap"
